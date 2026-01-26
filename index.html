@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Territorio Salon</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        .legend { 
+            position: absolute; bottom: 30px; left: 10px; z-index: 1000; 
+            background: white; padding: 15px; border-radius: 10px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3); line-height: 1.6;
+        }
+        .info-update { font-size: 0.8em; color: #555; margin-top: 8px; border-top: 1px solid #eee; padding-top: 5px; }
+
+        /* --- NUEVO: Estilos para el Popup de Comentarios --- */
+        .popup-content { min-width: 250px; max-height: 300px; overflow-y: auto; }
+        .popup-header { font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+        .btn-status { width: 100%; padding: 8px; border: none; border-radius: 4px; cursor: pointer; color: white; font-weight: bold; margin-bottom: 15px; }
+        .btn-terminado { background-color: #2ecc71; } /* Verde */
+        .btn-pendiente { background-color: #e74c3c; } /* Rojo */
+        
+        .comments-section { background: #f9f9f9; padding: 10px; border-radius: 5px; }
+        .comment-list { list-style: none; padding: 0; margin: 0 0 10px 0; max-height: 100px; overflow-y: auto; font-size: 0.9em; }
+        .comment-item { border-bottom: 1px solid #eee; padding: 5px 0; }
+        .comment-date { font-size: 0.7em; color: #888; display: block; }
+        
+        .comment-input-area { display: flex; gap: 5px; }
+        .comment-input { flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; }
+        .btn-send { background: #3498db; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="legend">
+        <strong>Estado de Manzanas</strong><br>
+        <span style="color: #e74c3c">●</span> Pendiente<br>
+        <span style="color: #2ecc71">●</span> Terminado
+        <div id="last-action" class="info-update">Haz clic en una manzana para ver detalles</div>
+    </div>
+    
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key="></script>
+    <script src="https://unpkg.com/leaflet.gridlayer.googlemutant@latest/dist/Leaflet.GoogleMutant.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        // NUEVO: Agregamos 'update' y 'push' a las importaciones
+        import { getDatabase, ref, set, update, push, onChildAdded, onChildChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+        // Configuración Firebase (mantenida de tu código original)
+        const firebaseConfig = {
+            apiKey: "AIzaSyB64S5ZdQvuCliBkh7ICuGz7kNyiatR018",
+            authDomain: "artesanias-2f467.firebaseapp.com",
+            databaseURL: "https://artesanias-2f467-default-rtdb.firebaseio.com",
+            projectId: "artesanias-2f467",
+            storageBucket: "artesanias-2f467.firebasestorage.app",
+            messagingSenderId: "631459109558",
+            appId: "1:631459109558:web:d5e6487db6d774ade8a417"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const progresoRef = ref(db, 'progreso_manzanas');
+
+        // Inicializar Mapa centrado en la zona
+        const map = L.map('map').setView([20.618, -103.232], 16);
+
+        // Capa de Google Maps
+        const googleRoadmap = L.gridLayer.googleMutant({
+            type: 'roadmap' 
+        }).addTo(map);
+
+        const capasPorId = {}; 
+        const estadoLocal = {};
+
+        const formatearFecha = (timestamp) => {
+            if(!timestamp) return "Sin datos";
+            const d = new Date(timestamp);
+            return d.toLocaleDateString() + " " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        };
+
+        const actualizarEstiloManzana = (id, data) => {
+            if (capasPorId[id]) {
+                const completado = typeof data === 'object' ? data.completado : data;
+                capasPorId[id].setStyle({
+                    fillColor: completado ? '#2ecc71' : '#e74c3c',
+                    weight: 2,
+                    opacity: 1,
+                    color: 'white',
+                    fillOpacity: 0.4
+                });
+            }
+        };
+
+        // --- NUEVO: Función para crear el contenido del Popup (Interfaz de comentarios) ---
+        const crearPopupContent = (id) => {
+            const data = estadoLocal[id] || { completado: false, comentarios: {} };
+            const div = document.createElement('div');
+            div.className = 'popup-content';
+
+            // 1. Botón de Estado
+            const estadoTexto = data.completado ? "MARCAR COMO PENDIENTE" : "MARCAR COMO TERMINADO";
+            const claseBtn = data.completado ? "btn-pendiente" : "btn-terminado";
+            
+            // HTML Estructura
+            div.innerHTML = `
+                <div class="popup-header">Manzana ID: ${id}</div>
+                <button id="btn-toggle-${id}" class="btn-status ${claseBtn}">${estadoTexto}</button>
+                
+                <div class="comments-section">
+                    <strong>Comentarios:</strong>
+                    <ul id="lista-comentarios-${id}" class="comment-list">
+                        <li style="color:#999; font-style:italic;">Cargando...</li>
+                    </ul>
+                    <div class="comment-input-area">
+                        <input type="text" id="input-comentario-${id}" class="comment-input" placeholder="Escribe algo..." />
+                        <button id="btn-send-${id}" class="btn-send">Enviar</button>
+                    </div>
+                </div>
+            `;
+
+            // Lógica Botón Toggle (Estado)
+            const btnToggle = div.querySelector(`#btn-toggle-${id}`);
+            btnToggle.onclick = () => {
+                const nuevoEstado = !data.completado;
+                // USAMOS UPDATE para no borrar los comentarios
+                update(ref(db, 'progreso_manzanas/' + id), {
+                    completado: nuevoEstado,
+                    fecha: Date.now()
+                });
+                map.closePopup(); // Cierra popup tras actualizar
+            };
+
+            // Lógica Enviar Comentario
+            const btnSend = div.querySelector(`#btn-send-${id}`);
+            const inputComment = div.querySelector(`#input-comentario-${id}`);
+            
+            const enviarComentario = () => {
+                const texto = inputComment.value.trim();
+                if(texto) {
+                    // Guardar comentario en Firebase (push crea ID único)
+                    push(ref(db, `progreso_manzanas/${id}/comentarios`), {
+                        texto: texto,
+                        fecha: Date.now()
+                    });
+                    inputComment.value = ""; // Limpiar input
+                }
+            };
+            
+            btnSend.onclick = enviarComentario;
+            // Permitir enviar con Enter
+            inputComment.addEventListener("keypress", (e) => {
+                if (e.key === "Enter") enviarComentario();
+            });
+
+            // Renderizar lista de comentarios existentes
+            const lista = div.querySelector(`#lista-comentarios-${id}`);
+            const comentariosObj = data.comentarios || {};
+            const htmlComentarios = Object.values(comentariosObj)
+                .sort((a, b) => b.fecha - a.fecha) // Ordenar más reciente primero
+                .map(c => `
+                    <li class="comment-item">
+                        ${c.texto}
+                        <span class="comment-date">${formatearFecha(c.fecha)}</span>
+                    </li>
+                `).join('');
+            
+            lista.innerHTML = htmlComentarios || '<li style="color:#999;">Sin comentarios aún.</li>';
+
+            return div;
+        };
+
+
+        // Cargar manzanas desde tu archivo JSON
+        fetch('manzanas.json')
+            .then(res => res.json())
+            .then(data => {
+                const geojsonLayer = L.geoJSON(data, {
+                    style: { fillColor: '#e74c3c', weight: 2, color: 'white', fillOpacity: 0.4 },
+                    onEachFeature: (feature, layer) => {
+                        const id = feature.properties.id;
+                        if (!id) return;
+
+                        capasPorId[id] = layer;
+                        // Tooltip simple al pasar mouse
+                        layer.bindTooltip("Manzana: " + id);
+                        
+                        layer.on('mouseover', function() {
+                            this.setStyle({ weight: 4, color: '#333', fillOpacity: 0.6 });
+                        });
+                        layer.on('mouseout', function() {
+                            this.setStyle({ weight: 2, color: 'white', fillOpacity: 0.4 });
+                        });
+
+                        // --- CAMBIO: Click ahora abre Popup en lugar de cambiar estado directo ---
+                        layer.on('click', () => {
+                            const popupContent = crearPopupContent(id);
+                            layer.bindPopup(popupContent).openPopup();
+                        });
+                    }
+                }).addTo(map);
+
+                map.fitBounds(geojsonLayer.getBounds());
+
+                const manejarCambio = (snapshot) => {
+                    const id = snapshot.key;
+                    const data = snapshot.val();
+                    estadoLocal[id] = data; // Guarda estado globalmente
+                    actualizarEstiloManzana(id, data);
+                    
+                    const fechaTxt = formatearFecha(data.fecha);
+                    document.getElementById('last-action').innerHTML = 
+                        `Último cambio: Manzana ${id}<br>${fechaTxt}`;
+
+                    // Si el popup de esta manzana está abierto, intentar refrescar (opcional, pero útil)
+                    // Nota: Leaflet no refresca popups abiertos automáticamente de forma sencilla, 
+                    // pero al reabrirlo se verán los cambios.
+                };
+
+                onChildAdded(progresoRef, manejarCambio);
+                onChildChanged(progresoRef, manejarCambio);
+            });
+    </script>
+</body>
+</html>
