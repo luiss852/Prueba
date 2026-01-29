@@ -264,7 +264,7 @@
         cargarTerritorios();
 
         // --- CONTROL DE CAPAS ---
-        //const baseMaps = { "Google Maps": googleRoadmap };
+        const baseMaps = { "Google Maps": googleRoadmap };
         const overlayMaps = { "Manzanas": capaManzanas, "Territorios": capaTerritorios };
 
         L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
