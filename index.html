@@ -264,15 +264,18 @@
         cargarTerritorios();
 
         // --- CONTROL DE CAPAS ---
-        const baseMaps = { "Google Maps": googleRoadmap };
-        const overlayMaps = { "Manzanas": capaManzanas, "Territorios": capaTerritorios };
+       const overlayMaps = { 
+            "Manzanas": capaManzanas, 
+            "Territorios": capaTerritorios 
+        };
 
-        L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
+        // Pasamos NULL como primer argumento para que no muestre capas base
+        L.control.layers(null, overlayMaps, { collapsed: false }).addTo(map);
 
-        // Capas por defecto
+        // Agregamos manualmente la capa de Google y Manzanas
         map.addLayer(googleRoadmap);
         map.addLayer(capaManzanas);
-
+        
         // --- FIREBASE LISTENERS ---
         const manejarCambio = (snapshot) => {
             const id = snapshot.key;
