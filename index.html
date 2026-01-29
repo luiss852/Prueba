@@ -219,7 +219,7 @@
                 });
         };
 
-        // 2. Cargar Territorios (Actualizado con Tip Pro)
+        // 2. Cargar Territorios
         const cargarTerritorios = () => {
             fetch('territorios.json')
                 .then(res => {
@@ -238,7 +238,7 @@
                         onEachFeature: (feature, layer) => {
                             const territorioId = feature.properties.id; 
                             
-                            // Etiqueta permanente centrada con estilo personalizado
+                            // Etiqueta permanente centrada (numero de territorio)
                             if (territorioId) {
                                 layer.bindTooltip(territorioId, { 
                                     permanent: true, 
@@ -264,7 +264,7 @@
         cargarTerritorios();
 
         // --- CONTROL DE CAPAS ---
-        const baseMaps = { "Google Maps": googleRoadmap };
+        //const baseMaps = { "Google Maps": googleRoadmap };
         const overlayMaps = { "Manzanas": capaManzanas, "Territorios": capaTerritorios };
 
         L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
