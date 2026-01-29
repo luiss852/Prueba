@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Territorio Salon</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        
+        /* Leyenda */
+        .legend { 
+            position: absolute; bottom: 30px; left: 10px; z-index: 1000; 
+            background: white; padding: 15px; border-radius: 10px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3); line-height: 1.6;
+        }
+        .info-update { font-size: 0.8em; color: #555; margin-top: 8px; border-top: 1px solid #eee; padding-top: 5px; }
+
+        /* Estilos del Popup y Comentarios */
+        .popup-content { min-width: 250px; max-height: 300px; overflow-y: auto; }
+        .popup-header { font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+        
+        .btn-status { width: 100%; padding: 8px; border: none; border-radius: 4px; cursor: pointer; color: white; font-weight: bold; margin-bottom: 15px; transition: background 0.3s; }
+        .btn-terminado { background-color: #2ecc71; }
+        .btn-pendiente { background-color: #e74c3c; }
+        .btn-status:hover { opacity: 0.9; }
+
+        .comments-section { background: #f9f9f9; padding: 10px; border-radius: 5px; }
+        .comment-list { list-style: none; padding: 0; margin: 0 0 10px 0; max-height: 100px; overflow-y: auto; font-size: 0.9em; }
+        .comment-item { border-bottom: 1px solid #eee; padding: 5px 0; }
+        .comment-date { font-size: 0.7em; color: #888; display: block; }
+        
+        .comment-input-area { display: flex; gap: 5px; }
+        .comment-input { flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; }
+        .btn-send { background: #3498db; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; }
+        .btn-send:hover { background: #2980b9; }
+
+        /* Estilo para las etiquetas de los territorios (Tip Pro) */
+        .etiqueta-territorio {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            color: #2980b9; /* Azul oscuro */
+            font-weight: bold;
+            font-size: 14px;
+            text-shadow: 1px 1px 2px white;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="legend">
+        <strong>Simbología</strong><br>
+        <span style="color: #e74c3c">●</span> Manzana Pendiente<br>
+        <span style="color: #2ecc71">●</span> Manzana Terminada<br>
+        <span style="color: #3498db; opacity: 0.6">■</span> Territorio
+        <div id="last-action" class="info-update">Haz clic en una manzana para ver detalles</div>
+    </div>
+    
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key="></script>
+    <script src="https://unpkg.com/leaflet.gridlayer.googlemutant@latest/dist/Leaflet.GoogleMutant.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getDatabase, ref, update, push, onChildAdded, onChildChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+        // Configuración Firebase
+        const firebaseConfig = {
+            apiKey: "",
+            authDomain: "artesanias-2f467.firebaseapp.com",
+            databaseURL: "https://artesanias-2f467-default-rtdb.firebaseio.com",
+            projectId: "artesanias-2f467",
+            storageBucket: "artesanias-2f467.firebasestorage.app",
+            messagingSenderId: "631459109558",
+            appId: "1:631459109558:web:d5e6487db6d774ade8a417"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const progresoRef = ref(db, 'progreso_manzanas');
+
+        // Inicializar Mapa
+        const map = L.map('map').setView([20.618, -103.232], 16);
+
+        // Capa Base Google Maps
+        const googleRoadmap = L.gridLayer.googleMutant({ type: 'roadmap' });
+        
+        // --- GESTIÓN DE CAPAS (LAYERS) ---
+        const capaManzanas = L.layerGroup();
+        const capaTerritorios = L.layerGroup();
+
+        const capasPorId = {}; 
+        const estadoLocal = {};
+
+        // Utilidades
+        const formatearFecha = (timestamp) => {
+            if(!timestamp) return "Sin datos";
+            const d = new Date(timestamp);
+            return d.toLocaleDateString() + " " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        };
+
+        const actualizarEstiloManzana = (id, data) => {
+            if (capasPorId[id]) {
+                const completado = data && typeof data === 'object' ? data.completado : false;
+                capasPorId[id].setStyle({
+                    fillColor: completado ? '#2ecc71' : '#e74c3c',
+                    weight: 2,
+                    opacity: 1,
+                    color: 'white',
+                    fillOpacity: 0.4
+                });
+            }
+        };
+
+        // Contenido del Popup (Botón + Comentarios)
+        const crearPopupContent = (id) => {
+            const data = estadoLocal[id] || { completado: false, comentarios: {} };
+            const div = document.createElement('div');
+            div.className = 'popup-content';
+
+            const estadoTexto = data.completado ? "MARCAR COMO PENDIENTE" : "MARCAR COMO TERMINADO";
+            const claseBtn = data.completado ? "btn-pendiente" : "btn-terminado";
+            
+            div.innerHTML = `
+                <div class="popup-header">Manzana ID: ${id}</div>
+                <button id="btn-toggle-${id}" class="btn-status ${claseBtn}">${estadoTexto}</button>
+                
+                <div class="comments-section">
+                    <strong>Comentarios:</strong>
+                    <ul id="lista-comentarios-${id}" class="comment-list">
+                        <li style="color:#999; font-style:italic;">Cargando...</li>
+                    </ul>
+                    <div class="comment-input-area">
+                        <input type="text" id="input-comentario-${id}" class="comment-input" placeholder="Escribe algo..." />
+                        <button id="btn-send-${id}" class="btn-send">Enviar</button>
+                    </div>
+                </div>
+            `;
+
+            // Lógica Toggle Estado
+            div.querySelector(`#btn-toggle-${id}`).onclick = () => {
+                update(ref(db, 'progreso_manzanas/' + id), {
+                    completado: !data.completado,
+                    fecha: Date.now()
+                });
+                map.closePopup();
+            };
+
+            // Lógica Enviar Comentario
+            const inputComment = div.querySelector(`#input-comentario-${id}`);
+            const enviarComentario = () => {
+                const texto = inputComment.value.trim();
+                if(texto) {
+                    push(ref(db, `progreso_manzanas/${id}/comentarios`), {
+                        texto: texto,
+                        fecha: Date.now()
+                    });
+                    inputComment.value = "";
+                }
+            };
+            
+            div.querySelector(`#btn-send-${id}`).onclick = enviarComentario;
+            inputComment.addEventListener("keypress", (e) => {
+                if (e.key === "Enter") enviarComentario();
+            });
+
+            // Renderizar comentarios
+            const lista = div.querySelector(`#lista-comentarios-${id}`);
+            const comentariosObj = data.comentarios || {};
+            const htmlComentarios = Object.values(comentariosObj)
+                .sort((a, b) => b.fecha - a.fecha)
+                .map(c => `
+                    <li class="comment-item">
+                        ${c.texto}
+                        <span class="comment-date">${formatearFecha(c.fecha)}</span>
+                    </li>
+                `).join('');
+            
+            lista.innerHTML = htmlComentarios || '<li style="color:#999;">Sin comentarios aún.</li>';
+
+            return div;
+        };
+
+        // --- CARGA DE DATOS ---
+
+        // 1. Cargar Manzanas
+        const cargarManzanas = () => {
+            fetch('manzanas.json')
+                .then(res => res.json())
+                .then(data => {
+                    const geojsonLayer = L.geoJSON(data, {
+                        style: { fillColor: '#e74c3c', weight: 2, color: 'white', fillOpacity: 0.4 },
+                        onEachFeature: (feature, layer) => {
+                            const id = feature.properties.id;
+                            if (!id) return;
+
+                            capasPorId[id] = layer;
+                            layer.bindTooltip("Manzana: " + id);
+                            
+                            layer.on('mouseover', function() {
+                                this.setStyle({ weight: 4, color: '#333', fillOpacity: 0.6 });
+                            });
+                            
+                            layer.on('mouseout', function() {
+                                actualizarEstiloManzana(id, estadoLocal[id]);
+                            });
+
+                            layer.on('click', () => {
+                                const popupContent = crearPopupContent(id);
+                                layer.bindPopup(popupContent).openPopup();
+                            });
+                        }
+                    }).addTo(capaManzanas); // Agregar al grupo
+                    map.fitBounds(geojsonLayer.getBounds());
+                });
+        };
+
+        // 2. Cargar Territorios (Actualizado con Tip Pro)
+        const cargarTerritorios = () => {
+            fetch('territorios.json')
+                .then(res => {
+                    if(!res.ok) throw new Error("Falta territorios.json");
+                    return res.json();
+                })
+                .then(data => {
+                    L.geoJSON(data, {
+                        style: { 
+                            fillColor: '#3498db', 
+                            weight: 3, 
+                            color: '#2980b9', 
+                            fillOpacity: 0.15,
+                            dashArray: '5, 10' 
+                        },
+                        onEachFeature: (feature, layer) => {
+                            const territorioId = feature.properties.id; 
+                            
+                            // Etiqueta permanente centrada con estilo personalizado
+                            if (territorioId) {
+                                layer.bindTooltip(territorioId, { 
+                                    permanent: true, 
+                                    direction: 'center',
+                                    className: 'etiqueta-territorio'
+                                });
+                            }
+
+                            layer.on('mouseover', function() {
+                                this.setStyle({ fillOpacity: 0.3, weight: 5 });
+                            });
+                            layer.on('mouseout', function() {
+                                this.setStyle({ fillOpacity: 0.15, weight: 3 });
+                            });
+                        }
+                    }).addTo(capaTerritorios);
+                })
+                .catch(err => console.log("Nota: Crea 'territorios.json' para ver esa capa."));
+        };
+
+        // Ejecutar cargas
+        cargarManzanas();
+        cargarTerritorios();
+
+        // --- CONTROL DE CAPAS ---
+        const baseMaps = { "Google Maps": googleRoadmap };
+        const overlayMaps = { "Manzanas": capaManzanas, "Territorios": capaTerritorios };
+
+        L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
+
+        // Capas por defecto
+        map.addLayer(googleRoadmap);
+        map.addLayer(capaManzanas);
+
+        // --- FIREBASE LISTENERS ---
+        const manejarCambio = (snapshot) => {
+            const id = snapshot.key;
+            const data = snapshot.val();
+            estadoLocal[id] = data;
+            actualizarEstiloManzana(id, data);
+            
+            const fechaTxt = formatearFecha(data.fecha);
+            document.getElementById('last-action').innerHTML = 
+                `Último cambio: Manzana ${id}<br>${fechaTxt}`;
+        };
+
+        onChildAdded(progresoRef, manejarCambio);
+        onChildChanged(progresoRef, manejarCambio);
+
+    </script>
+</body>
+</html>
