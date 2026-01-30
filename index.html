@@ -2,20 +2,47 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Territorio Salon</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         #map { height: 100vh; width: 100%; }
         
-        /* Leyenda */
+        /* --- ESTILOS DE LA LEYENDA (PC) --- */
         .legend { 
             position: absolute; bottom: 30px; left: 10px; z-index: 1000; 
             background: white; padding: 15px; border-radius: 10px; 
             box-shadow: 0 4px 15px rgba(0,0,0,0.3); line-height: 1.6;
+            min-width: 180px;
         }
         .info-update { font-size: 0.8em; color: #555; margin-top: 8px; border-top: 1px solid #eee; padding-top: 5px; }
+
+        /* --- ESTILOS PARA MÓVILES (NUEVO) --- */
+        /* Se activa cuando la pantalla mide menos de 600px */
+        @media (max-width: 600px) {
+            .legend {
+                bottom: 25px;       /* Más pegado al borde */
+                left: 10px;
+                padding: 8px 10px;  /* Menos relleno */
+                font-size: 12px;    /* Letra más pequeña */
+                line-height: 1.3;   /* Menos espacio entre líneas */
+                width: auto;
+                min-width: unset;   /* Quitar ancho mínimo */
+                max-width: 160px;   /* Que no sea muy ancho */
+                background: rgba(255, 255, 255, 0.95); /* Un poco transparente */
+            }
+            .legend strong {
+                font-size: 1.1em;
+                display: block;
+                margin-bottom: 2px;
+            }
+            .info-update {
+                margin-top: 4px;
+                padding-top: 4px;
+                font-size: 0.9em;
+            }
+        }
 
         /* Estilos del Popup y Comentarios */
         .popup-content { min-width: 250px; max-height: 300px; overflow-y: auto; }
@@ -36,14 +63,10 @@
         .btn-send { background: #3498db; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; }
         .btn-send:hover { background: #2980b9; }
 
-        /* Estilo para las etiquetas de los territorios (Tip Pro) */
+        /* Estilo para las etiquetas de los territorios */
         .etiqueta-territorio {
-            background: transparent;
-            border: none;
-            box-shadow: none;
-            color: #2980b9; /* Azul oscuro */
-            font-weight: bold;
-            font-size: 14px;
+            background: transparent; border: none; box-shadow: none;
+            color: #2980b9; font-weight: bold; font-size: 14px;
             text-shadow: 1px 1px 2px white;
         }
     </style>
@@ -55,7 +78,7 @@
         <span style="color: #e74c3c">●</span> Manzana Pendiente<br>
         <span style="color: #2ecc71">●</span> Manzana Terminada<br>
         <span style="color: #3498db; opacity: 0.6">■</span> Territorio
-        <div id="last-action" class="info-update">Haz clic en una manzana para ver detalles</div>
+        <div id="last-action" class="info-update">Cargando datos...</div>
     </div>
     
     <div id="map"></div>
@@ -89,18 +112,22 @@
         // Capa Base Google Maps
         const googleRoadmap = L.gridLayer.googleMutant({ type: 'roadmap' });
         
-        // --- GESTIÓN DE CAPAS (LAYERS) ---
+        // --- GESTIÓN DE CAPAS ---
         const capaManzanas = L.layerGroup();
         const capaTerritorios = L.layerGroup();
 
         const capasPorId = {}; 
         const estadoLocal = {};
+        
+        // Variable para rastrear la fecha más reciente encontrada
+        let ultimaFechaGlobal = 0;
 
         // Utilidades
         const formatearFecha = (timestamp) => {
             if(!timestamp) return "Sin datos";
             const d = new Date(timestamp);
-            return d.toLocaleDateString() + " " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            // Formato corto para móviles: DD/MM HH:MM
+            return d.toLocaleDateString('es-MX', {day: '2-digit', month: '2-digit'}) + " " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
         };
 
         const actualizarEstiloManzana = (id, data) => {
@@ -116,17 +143,17 @@
             }
         };
 
-        // Contenido del Popup (Botón + Comentarios)
+        // --- POPUPS ---
         const crearPopupContent = (id) => {
             const data = estadoLocal[id] || { completado: false, comentarios: {} };
             const div = document.createElement('div');
             div.className = 'popup-content';
 
-            const estadoTexto = data.completado ? "MARCAR COMO PENDIENTE" : "MARCAR COMO TERMINADO";
+            const estadoTexto = data.completado ? "MARCAR PENDIENTE" : "MARCAR TERMINADO";
             const claseBtn = data.completado ? "btn-pendiente" : "btn-terminado";
             
             div.innerHTML = `
-                <div class="popup-header">Manzana ID: ${id}</div>
+                <div class="popup-header">Manzana: ${id}</div>
                 <button id="btn-toggle-${id}" class="btn-status ${claseBtn}">${estadoTexto}</button>
                 
                 <div class="comments-section">
@@ -135,8 +162,8 @@
                         <li style="color:#999; font-style:italic;">Cargando...</li>
                     </ul>
                     <div class="comment-input-area">
-                        <input type="text" id="input-comentario-${id}" class="comment-input" placeholder="Escribe algo..." />
-                        <button id="btn-send-${id}" class="btn-send">Enviar</button>
+                        <input type="text" id="input-comentario-${id}" class="comment-input" placeholder="..." />
+                        <button id="btn-send-${id}" class="btn-send">Env</button>
                     </div>
                 </div>
             `;
@@ -180,14 +207,12 @@
                     </li>
                 `).join('');
             
-            lista.innerHTML = htmlComentarios || '<li style="color:#999;">Sin comentarios aún.</li>';
+            lista.innerHTML = htmlComentarios || '<li style="color:#999;">Sin comentarios.</li>';
 
             return div;
         };
 
-        // --- CARGA DE DATOS ---
-
-        // 1. Cargar Manzanas
+        // --- CARGAS JSON ---
         const cargarManzanas = () => {
             fetch('manzanas.json')
                 .then(res => res.json())
@@ -197,29 +222,21 @@
                         onEachFeature: (feature, layer) => {
                             const id = feature.properties.id;
                             if (!id) return;
-
                             capasPorId[id] = layer;
-                            layer.bindTooltip("Manzana: " + id);
+                            layer.bindTooltip("M: " + id); // Tooltip más corto para móviles
                             
-                            layer.on('mouseover', function() {
-                                this.setStyle({ weight: 4, color: '#333', fillOpacity: 0.6 });
-                            });
-                            
-                            layer.on('mouseout', function() {
-                                actualizarEstiloManzana(id, estadoLocal[id]);
-                            });
-
+                            layer.on('mouseover', function() { this.setStyle({ weight: 4, color: '#333', fillOpacity: 0.6 }); });
+                            layer.on('mouseout', function() { actualizarEstiloManzana(id, estadoLocal[id]); });
                             layer.on('click', () => {
                                 const popupContent = crearPopupContent(id);
                                 layer.bindPopup(popupContent).openPopup();
                             });
                         }
-                    }).addTo(capaManzanas); // Agregar al grupo
+                    }).addTo(capaManzanas);
                     map.fitBounds(geojsonLayer.getBounds());
                 });
         };
 
-        // 2. Cargar Territorios
         const cargarTerritorios = () => {
             fetch('territorios.json')
                 .then(res => {
@@ -228,64 +245,52 @@
                 })
                 .then(data => {
                     L.geoJSON(data, {
-                        style: { 
-                            fillColor: '#3498db', 
-                            weight: 3, 
-                            color: '#2980b9', 
-                            fillOpacity: 0.15,
-                            dashArray: '5, 10' 
-                        },
+                        style: { fillColor: '#3498db', weight: 3, color: '#2980b9', fillOpacity: 0.15, dashArray: '5, 10' },
                         onEachFeature: (feature, layer) => {
                             const territorioId = feature.properties.id; 
-                            
-                            // Etiqueta permanente centrada (numero de territorio)
                             if (territorioId) {
                                 layer.bindTooltip(territorioId, { 
-                                    permanent: true, 
-                                    direction: 'center',
-                                    className: 'etiqueta-territorio'
+                                    permanent: true, direction: 'center', className: 'etiqueta-territorio'
                                 });
                             }
-
-                            layer.on('mouseover', function() {
-                                this.setStyle({ fillOpacity: 0.3, weight: 5 });
-                            });
-                            layer.on('mouseout', function() {
-                                this.setStyle({ fillOpacity: 0.15, weight: 3 });
-                            });
+                            layer.on('mouseover', function() { this.setStyle({ fillOpacity: 0.3, weight: 5 }); });
+                            layer.on('mouseout', function() { this.setStyle({ fillOpacity: 0.15, weight: 3 }); });
                         }
                     }).addTo(capaTerritorios);
                 })
-                .catch(err => console.log("Nota: Crea 'territorios.json' para ver esa capa."));
+                .catch(err => console.log("Crea 'territorios.json' para ver esa capa."));
         };
 
-        // Ejecutar cargas
         cargarManzanas();
         cargarTerritorios();
 
-        // --- CONTROL DE CAPAS ---
-       const overlayMaps = { 
-            "Manzanas": capaManzanas, 
-            "Territorios": capaTerritorios 
-        };
-
-        // Pasamos NULL como primer argumento para que no muestre capas base
+        // --- CAPAS ---
+        const overlayMaps = { "Manzanas": capaManzanas, "Territorios": capaTerritorios };
         L.control.layers(null, overlayMaps, { collapsed: false }).addTo(map);
-
-        // Agregamos manualmente la capa de Google y Manzanas
         map.addLayer(googleRoadmap);
         map.addLayer(capaManzanas);
-        
-        // --- FIREBASE LISTENERS ---
+
+        // --- FIREBASE LISTENERS (Lógica Mejorada) ---
         const manejarCambio = (snapshot) => {
             const id = snapshot.key;
             const data = snapshot.val();
             estadoLocal[id] = data;
+            
             actualizarEstiloManzana(id, data);
             
-            const fechaTxt = formatearFecha(data.fecha);
-            document.getElementById('last-action').innerHTML = 
-                `Último cambio: Manzana ${id}<br>${fechaTxt}`;
+            // Lógica para guardar y mostrar SOLO el cambio más reciente real
+            if (data.fecha && data.fecha > ultimaFechaGlobal) {
+                ultimaFechaGlobal = data.fecha;
+                const fechaTxt = formatearFecha(data.fecha);
+                
+                // Actualizar el cuadro de texto
+                const divInfo = document.getElementById('last-action');
+                divInfo.innerHTML = `<strong>Último:</strong> M-${id}<br>${fechaTxt}`;
+                
+                // Efecto visual para indicar actualización
+                divInfo.style.backgroundColor = "#fff3cd"; // Un parpadeo amarillo
+                setTimeout(() => divInfo.style.backgroundColor = "transparent", 1000);
+            }
         };
 
         onChildAdded(progresoRef, manejarCambio);
